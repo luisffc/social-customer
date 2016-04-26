@@ -1,19 +1,94 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+<mule xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:facebook="http://www.mulesoft.org/schema/mule/facebook" xmlns:twitter="http://www.mulesoft.org/schema/mule/twitter" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
 	xmlns:spring="http://www.springframework.org/schema/beans" 
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
 http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
 http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
-http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
-    
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/twitter http://www.mulesoft.org/schema/mule/twitter/current/mule-twitter.xsd
+http://www.mulesoft.org/schema/mule/facebook http://www.mulesoft.org/schema/mule/facebook/current/mule-facebook.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd">
+
     <db:mysql-config name="MySQL_Configuration" host="${db.host}" port="${db.port}" user="${db.user}" password="${db.password}" database="${db.database}" doc:name="MySQL Configuration"/>
 
-    <http:listener-config name="HTTP_Listener_Configuration" host="${http.domain}" port="${http.port}" doc:name="HTTP Listener Configuration"/>
-    
-    <flow name="social-customerFlow">
-        <http:listener config-ref="HTTP_Listener_Configuration" path="/" doc:name="HTTP"/>
-        <set-payload value="yeah it works!" doc:name="Set Payload"/>
+	<http:listener-config name="HTTP_Listener_Configuration" host="${http.domain}" port="${http.port}" doc:name="HTTP Listener Configuration"/>
+
+    <twitter:config name="Twitter__Configuration" accessKey="${twitter.accessKey}" accessSecret="${twitter.accessSecret}" consumerKey="${twitter.consumerKey}" consumerSecret="${twitter.consumerSecret}" doc:name="Twitter: Configuration"/>
+
+    <facebook:config-with-oauth name="Facebook"
+		consumerKey="${facebook.consumerKey}" consumerSecret="${facebook.consumerSecret}"
+		doc:name="Facebook" scope="user_posts,user_friends">
+		<facebook:oauth-callback-config domain="${http.domain}"
+			localPort="${http.port}" remotePort="${http.port}" path="fbcallback" />
+	</facebook:config-with-oauth>
+
+    <flow name="importCustomerFlow">
+        <file:inbound-endpoint path="/tmp/customers" responseTimeout="10000" doc:name="File"/>
+        <dw:transform-message doc:name="Transform Message" metadata:id="13135c9e-c3ea-413b-a960-2982ea0e102e">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload map
+{
+	firstname: $.firstname,
+	lastname: $.lastname,
+	facebook: $.facebook,
+	twitter: $.twitter
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <db:insert config-ref="MySQL_Configuration" bulkMode="true" doc:name="Database">
+            <db:parameterized-query><![CDATA[insert into customers (firstname,lastname,facebook,twitter) values (#[payload.firstname], #[payload.lastname], #[payload.facebook], #[payload.twitter]);]]></db:parameterized-query>
+        </db:insert>
     </flow>
+    <flow name="retrivieCustomersFlow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/customers" doc:name="HTTP"/>
+        <db:select config-ref="MySQL_Configuration" doc:name="Database">
+            <db:parameterized-query><![CDATA[SELECT * from customers;]]></db:parameterized-query>
+        </db:select>
+        <set-variable variableName="customers" value="#[[]]" doc:name="Variable"/>
+        <foreach doc:name="For Each Customer">
+            <dw:transform-message doc:name="Transform Message">
+                <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+
+{
+	id: payload.id,
+	firstname: payload.firstname,
+	lastname: payload.lastname,
+	facebook: payload.facebook,
+	twitter: payload.twitter
+}]]></dw:set-payload>
+            </dw:transform-message>
+            <set-variable variableName="customer" value="#[payload]" doc:name="Variable"/>
+            <expression-component doc:name="Expression"><![CDATA[flowVars.customer.facebookPicture = 'http://${http.domain}:${http.port}/fbphoto?fbuser='+flowVars.customer.facebook;]]></expression-component>
+			<twitter:get-user-timeline-by-screen-name config-ref="Twitter__Configuration" screenName="#[payload.twitter]" count="5" doc:name="Twitter"/>
+            <set-variable variableName="tweets" value="#[[]]" doc:name="Variable"/>
+            <foreach doc:name="For Each Tweet">
+                <expression-component doc:name="Expression"><![CDATA[flowVars.tweets.add(payload.text)]]></expression-component>
+            </foreach>
+            <expression-component doc:name="Expression"><![CDATA[flowVars.customer.lastTweets = tweets;
+flowVars.customers.add(customer);]]></expression-component>
+        </foreach>
+        <set-payload value="#[flowVars.customers]" doc:name="Set Payload"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+    </flow>
+    
+    <flow name="facebookAuthorizeFlow">
+		<http:listener config-ref="HTTP_Listener_Configuration"
+			path="/fbauthorize" doc:name="HTTP" />
+		<facebook:authorize config-ref="Facebook" doc:name="Auhtorize" />
+        <set-payload value="Facebook authorized" doc:name="Set Payload"/>
+	</flow>
+	
+    <flow name="getFbPictureFlow">
+		<http:listener config-ref="HTTP_Listener_Configuration"
+			path="/fbphoto" doc:name="HTTP" />
+        <facebook:get-user-picture config-ref="Facebook"  doc:name="User picture" user="#[message.inboundProperties.'http.query.params'.get('fbuser')]" type="large"/>
+	</flow>
 </mule>
