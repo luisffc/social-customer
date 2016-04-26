@@ -66,7 +66,7 @@ payload map
 }]]></dw:set-payload>
             </dw:transform-message>
             <set-variable variableName="customer" value="#[payload]" doc:name="Variable"/>
-            <expression-component doc:name="Expression"><![CDATA[flowVars.customer.facebookPicture = 'http://${http.domain}:${http.port}/fbphoto?fbuser='+flowVars.customer.facebook;]]></expression-component>
+            <expression-component doc:name="Expression"><![CDATA[flowVars.customer.facebookPicture = 'http://${http.domain}:${http.port}/customer/'+flowVars.customer.id+'/facebook/profile.jpg';]]></expression-component>
 			<twitter:get-user-timeline-by-screen-name config-ref="Twitter__Configuration" screenName="#[payload.twitter]" count="5" doc:name="Twitter"/>
             <set-variable variableName="tweets" value="#[[]]" doc:name="Variable"/>
             <foreach doc:name="For Each Tweet">
@@ -88,7 +88,11 @@ flowVars.customers.add(customer);]]></expression-component>
 	
     <flow name="getFbPictureFlow">
 		<http:listener config-ref="HTTP_Listener_Configuration"
-			path="/fbphoto" doc:name="HTTP" />
-        <facebook:get-user-picture config-ref="Facebook"  doc:name="User picture" user="#[message.inboundProperties.'http.query.params'.get('fbuser')]" type="large"/>
+			path="/customer/{customerId}/facebook/profile.jpg" doc:name="HTTP" allowedMethods="GET"/>
+        <db:select config-ref="MySQL_Configuration" doc:name="Customer by id">
+            <db:parameterized-query><![CDATA[SELECT facebook from customers where id = #[message.inboundProperties.'http.uri.params'.customerId];]]></db:parameterized-query>
+        </db:select>
+        <logger message="Getting profile picture for face id: #[payload]" level="INFO" doc:name="Logger"/>
+        <facebook:get-user-picture config-ref="Facebook"  doc:name="User picture" user="#[payload.get(0).facebook]" type="large"/>
 	</flow>
 </mule>
